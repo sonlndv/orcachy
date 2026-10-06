@@ -382,12 +382,26 @@ module.exports = {
     // Why after the prune: `pnpm install:release` widens the CPU set for cross-builds,
     // so an arm64 slice can still carry the x64 @parcel/watcher until
     // prunePackagedRuntimeNodeModules drops it.
+    // Why gated: this floor exists so a build compiled on a new CI runner still
+    // launches on old-Ubuntu redistribution targets. Orcachy (Son's local fork,
+    // omarchy-rebuild.sh) builds and installs on this one glibc-2.44 host only —
+    // it is never redistributed — so set ORCA_LOCAL_SKIP_GLIBC_FLOOR=1 to skip a
+    // check that would otherwise force building node-pty in an old-glibc
+    // container for every rebuild. Unset by default: CI/official release builds
+    // are unaffected.
     if (context.electronPlatformName === 'linux') {
-      // Why the arch is passed: symbol-version checks pass happily on a wrong-architecture binary,
-      // so a cross-built slice could ship the host's pty.node and only fail at runtime.
-      verifyLinuxGlibcFloor(context.appOutDir, {
-        targetArch: { 1: 'x64', 3: 'arm64' }[context.arch]
-      })
+      if (process.env.ORCA_LOCAL_SKIP_GLIBC_FLOOR === '1') {
+        console.log(
+          '[afterPack] ORCA_LOCAL_SKIP_GLIBC_FLOOR=1: skipping the Ubuntu-20.04 glibc floor ' +
+            'check (local-only install, not for redistribution).'
+        )
+      } else {
+        // Why the arch is passed: symbol-version checks pass happily on a wrong-architecture binary,
+        // so a cross-built slice could ship the host's pty.node and only fail at runtime.
+        verifyLinuxGlibcFloor(context.appOutDir, {
+          targetArch: { 1: 'x64', 3: 'arm64' }[context.arch]
+        })
+      }
     }
     verifyPackagedMainRuntimeDeps(resourcesDir)
     // Why: boot the packaged daemon-entry under plain Node, but only for the
@@ -712,7 +726,16 @@ module.exports = {
   // on Intel Macs. The beforeBuild hook performs Orca's targeted rebuild and
   // returns false so electron-builder does not rebuild optional cpu-features.
   npmRebuild: true,
-  publish: {
+  // Why `publish: null` under this flag: electron-builder writes
+  // resources/app-update.yml from the `publish` block, and NSIS/AppImage
+  // auto-updaters read it at runtime to find new releases. Orcachy (Son's
+  // local fork, built by omarchy-rebuild.sh) must never auto-update from
+  // stablyai/orca's GitHub releases — that would silently overwrite fork-only
+  // changes with the upstream build. Setting ORCA_LOCAL_SKIP_AUTO_UPDATE=1
+  // drops the publish config entirely so electron-builder emits no
+  // app-update.yml at all, with no source edit to the updater code.
+  // Upstream still gets official releases unaffected: the flag is unset there.
+  publish: process.env.ORCA_LOCAL_SKIP_AUTO_UPDATE === '1' ? null : {
     provider: 'github',
     owner: 'stablyai',
     repo: devChannelRepo ?? 'orca',
